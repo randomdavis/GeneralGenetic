@@ -4,8 +4,39 @@ from typing import List
 import random
 import time
 
+from tqdm import tqdm
+import logging
+import sys
+from datetime import datetime
+
+# Create a unique log file name with the current date and time
+current_datetime = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+log_file_name = f"output_{current_datetime}.log"
+
+# Create a logger
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
+# Create a file handler for output.log
+file_handler = logging.FileHandler(log_file_name)
+file_handler.setLevel(logging.INFO)
+
+# Create a console handler for printing messages
+console_handler = logging.StreamHandler(sys.stdout)
+console_handler.setLevel(logging.INFO)
+
+# Create a formatter and set it for both handlers
+formatter = logging.Formatter('%(asctime)s %(message)s')
+file_handler.setFormatter(formatter)
+console_handler.setFormatter(formatter)
+
+# Add the handlers to the logger
+logger.addHandler(file_handler)
+logger.addHandler(console_handler)
+
 np.random.seed(42)
 random.seed(42)
+
 
 class Stock:
     def __init__(self, name: str, initial_stock_price: float, expected_return: float, volatility: float,
@@ -36,13 +67,16 @@ class Entity:
     def mutate(self, value):
         raise NotImplementedError()
 
+    def copy(self):
+        raise NotImplementedError()
+
     def split(self, point):
         max_index = (len(self.values) - 1)
         split_point = int(round(max_index * point))
         return [self.values[:split_point], self.values[split_point:]]
 
     def breed(self, other, mutation_chance=0.001, fixed_length_genome=False):
-        child = self.__class__()
+        child = self.copy()
         split_point = random.random()
         self_values_split = self.split(split_point)
         other_values_split = other.split(split_point)
@@ -104,48 +138,84 @@ class GeneticAlgorithm:
         self.mutation_chance = mutation_chance
         self.fixed_length_genome = fixed_length_genome
         self.population = []
+        self.fittest = None
+        self.fittest_ever = None
 
     def run(self):
         start = time.process_time()
         total_cycles = 0
-        fittest = None
 
         self.generate_initial_population()
 
-        for _ in range(self.iterations):
-            total_cycles += 1
+        self.fittest = self.select_fittest()
+        self.fittest_ever = self.fittest
 
-            fittest = self.select_fittest()
-            print(fittest.value)
-            print(repr(fittest.fitness))
+        # Log the fittest member ever encountered
+        logger.info(f"Fittest ever: {self.fittest_ever.value}\n{self.fittest_ever.final_stats()}")
 
-            if fittest.fitness == 1.0:
-                break
+        try:  # Wrap the main loop in a try-except block to handle crashes
+            for _ in range(self.iterations):
+                logger.info(f"{total_cycles} {repr(self.fittest.fitness)} {self.fittest.value}")
+                total_cycles += 1
+                total_fitness = sum(entity.fitness for entity in self.population)
+                self.evolve_population(total_fitness)
+                for member in tqdm(self.population, desc="Evaluating", ncols=100):
+                    member.evaluate()
+                self.fittest = self.select_fittest()
 
-            self.evolve_population(fittest)
+                # Update the fittest member ever, if necessary
+                if self.fittest.fitness > self.fittest_ever.fitness:
+                    self.fittest_ever = self.fittest
+                    logger.info(f"New fittest ever: {self.fittest_ever.final_stats()}")
 
-        end = time.process_time()
-        total_time = end - start
+            end = time.process_time()
+            total_time = end - start
 
-        print("\nWinner:\n")
-        if fittest:
-            print(fittest.value)
-        print(f"{total_cycles} iterations")
-        print(f"{total_time:.2f} seconds")
+            logger.info("\nWinner:\n")
+            if self.fittest_ever:
+                logger.info(self.fittest_ever.value)
+            logger.info(f"{total_cycles} iterations")
+            logger.info(f"{total_time:.2f} seconds")
+            logger.info(f"Total iterations: {total_cycles}")
+            logger.info(f"Total time: {total_time:.2f} seconds")
+
+        except Exception as e:
+            logger.info("Interrupted:", e)
+            logger.error("Interrupted by exception", e)
+
+        # Print and log the final information for the fittest member ever encountered
+        logger.info(self.fittest_ever.final_stats())
+        logger.info("Terminating with fittest ever:")
+        logger.info(f"Fittest ever: {self.fittest_ever.value}\n{self.fittest_ever.final_stats()}")
+        for trade_history_item in self.fittest_ever.trade_history:
+            logger.info(trade_history_item)
 
     def generate_initial_population(self):
-        for _ in range(self.population_size):
+        for _ in tqdm(range(self.population_size), desc="Generating", ncols=100):
             new_entity = self.entity_factory()
             new_entity.evaluate()
             self.population.append(new_entity)
 
-    def evolve_population(self, fittest):
-        new_population = []
+    def roulette_wheel_selection(self, total_fitness):
+        selected_value = random.uniform(0, total_fitness)
+        current_value = 0
         for entity in self.population:
-            new_ent = fittest.breed(entity, mutation_chance=self.mutation_chance,
-                                    fixed_length_genome=self.fixed_length_genome)
-            new_ent.evaluate()
-            new_population.append(new_ent)
+            current_value += entity.fitness
+            if current_value >= selected_value:
+                return entity
+        return self.population[-1]
+
+    def evolve_population(self, total_fitness, keep_fittest=False):
+        if keep_fittest and self.fittest is not None:
+            new_population = [self.fittest]
+        else:
+            new_population = []
+        while len(new_population) < self.population_size:
+            parent1 = self.roulette_wheel_selection(total_fitness)
+            parent2 = self.roulette_wheel_selection(total_fitness)
+            child = parent1.breed(parent2, mutation_chance=self.mutation_chance,
+                                  fixed_length_genome=self.fixed_length_genome)
+            new_population.append(child)
         self.population = new_population
 
     def select_fittest(self):
@@ -161,21 +231,8 @@ class InvestorPortfolio(Entity):
     def set_stocks(cls, stocks: List[Stock]):
         cls.stocks = stocks
 
-    def __init__(self, initial_cash: float, sell_threshold: float, buy_threshold: float, stop_loss_ratio: float,
-                 buy_ratio: float, sell_ratio: float,
-                 mutation_amount=0.1):
+    def __init__(self):
         Entity.__init__(self)
-        self.initial_cash = initial_cash
-        self.target_cash = self.initial_cash
-        self.sell_threshold = sell_threshold
-        self.buy_threshold = buy_threshold
-        self.stop_loss_ratio = stop_loss_ratio
-        self.buy_ratio = buy_ratio
-        self.sell_ratio = sell_ratio
-        self.init_values_from_parameters()
-
-        self.mutation_amount = mutation_amount
-
         self.reset()
 
     def __eq__(self, other):
@@ -190,6 +247,49 @@ class InvestorPortfolio(Entity):
     def __str__(self):
         return self.string_representation(-1)
 
+    def copy(self):
+        copied_self = InvestorPortfolio()
+        copied_self.initial_cash = self.initial_cash
+        copied_self.mutation_amount = self.mutation_amount
+        copied_self.initialize()
+        return copied_self
+
+    def setup(self, initial_cash: float, sell_threshold: float, buy_threshold: float, stop_loss_ratio: float,
+                 buy_ratio: float, sell_ratio: float,
+                 mutation_amount=0.1):
+        self.initial_cash = initial_cash
+        self.target_cash = self.initial_cash
+        self.sell_threshold = sell_threshold
+        self.buy_threshold = buy_threshold
+        self.stop_loss_ratio = stop_loss_ratio
+        self.buy_ratio = buy_ratio
+        self.sell_ratio = sell_ratio
+        self.init_values_from_parameters()
+
+        self.mutation_amount = mutation_amount
+        self.initialize()
+
+    def initialize(self):
+        self.cash = self.initial_cash
+        self.target_cash = self.initial_cash
+        self.owned_stocks = {stock.name: 0 for stock in self.stocks}
+
+    def reset(self):
+        self.num_buys = 0
+        self.num_sells = 0
+        self.trade_history = []
+        self.previous_buy_or_sell_prices = {}
+        self.trade_history = []
+        self.num_sells = 0
+        self.num_buys = 0
+
+    def set_value_from_parameters(self):
+        self.value = f"sell_threshold {repr(self.sell_threshold)} " + \
+                     f"buy_threshold {repr(self.buy_threshold)} " + \
+                     f"stop_loss_ratio {repr(self.stop_loss_ratio)} " + \
+                     f"buy_ratio {repr(self.buy_ratio)} " + \
+                     f"sell_ratio {repr(self.sell_ratio)}"
+
     def init_values_from_parameters(self):
         self.values = [
             self.sell_threshold,
@@ -198,6 +298,7 @@ class InvestorPortfolio(Entity):
             self.buy_ratio,
             self.sell_ratio,
         ]
+        self.set_value_from_parameters()
 
     def set_parameters_from_values(self):
         self.sell_threshold = self.values[0]
@@ -205,23 +306,12 @@ class InvestorPortfolio(Entity):
         self.stop_loss_ratio = self.values[2]
         self.buy_ratio = self.values[3]
         self.sell_ratio = self.values[4]
+        self.set_value_from_parameters()
 
     def mutate(self, original_value):
         mutation_value = random.uniform(-self.mutation_amount, self.mutation_amount)
         mutation_value += original_value
         return max(0.0, min(1.0, mutation_value))
-
-    def reset(self):
-        self.cash = self.initial_cash
-        self.owned_stocks = {stock.name: 0 for stock in self.stocks}
-        self.target_cash = self.initial_cash
-        self.num_buys = 0
-        self.num_sells = 0
-        self.trade_history = []
-        self.previous_buy_or_sell_prices = {}
-        self.trade_history = []
-        self.num_sells = 0
-        self.num_buys = 0
 
     def stocks_value(self, price_point):
         total_stock_value = 0.0
@@ -314,19 +404,22 @@ class InvestorPortfolio(Entity):
     def evaluate(self):
         self.set_parameters_from_values()
         self.reset()
+        self.initialize()
         self.backtest_strategy()
-        self.fitness = self.final_value() + (self.num_buys / 100) + (self.num_sells / 100)
+        self.fitness = self.final_value()
 
 
 def investor_portfolio_factory():
-    initial_cash = 1000
+    initial_cash = 10000
+    mutation_rate = 0.1
     sell_threshold = random.random()
     buy_threshold = random.random()
     stop_loss_ratio = random.random()
     buy_ratio = random.random()
     sell_ratio = random.random()
 
-    new_entity = InvestorPortfolio(initial_cash, sell_threshold, buy_threshold, stop_loss_ratio, buy_ratio, sell_ratio)
+    new_entity = InvestorPortfolio()
+    new_entity.setup(initial_cash, sell_threshold, buy_threshold, stop_loss_ratio, buy_ratio, sell_ratio, mutation_rate)
     return new_entity
 
 
@@ -339,12 +432,18 @@ def main():
     InvestorPortfolio.set_stocks(stock_list)  # Make sure the stocks are set before creating an instance
     ga = GeneticAlgorithm(
         entity_factory=investor_portfolio_factory,
-        population_size=100,
+        population_size=2000,
         iterations=1000,
         mutation_chance=0.1,
         fixed_length_genome=True,
     )
-    ga.run()
+    try:
+        ga.run()
+    except KeyboardInterrupt:
+        print("interrupted by user")
+    logger.info(ga.fittest.final_stats())
+    for trade_history_item in ga.fittest.trade_history:
+        logger.info(trade_history_item)
 
 
 if __name__ == "__main__":
