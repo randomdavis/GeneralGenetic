@@ -70,6 +70,9 @@ class Entity:
     def copy(self):
         raise NotImplementedError()
 
+    def evaluate(self):
+        raise NotImplementedError()
+
     def split(self, point):
         max_index = (len(self.values) - 1)
         split_point = int(round(max_index * point))
@@ -119,9 +122,6 @@ class Entity:
     def __gt__(self, other):
         return self.fitness > other.fitness
 
-    def evaluate(self):
-        raise NotImplementedError("Subclasses should implement the evaluate() function")
-
 
 class GeneticAlgorithm:
     def __init__(
@@ -131,12 +131,14 @@ class GeneticAlgorithm:
         iterations=10000,
         mutation_chance=0.1,
         fixed_length_genome=False,
+        fitness_exponent=1.0,
     ):
         self.entity_factory = entity_factory
         self.population_size = population_size
         self.iterations = iterations
         self.mutation_chance = mutation_chance
         self.fixed_length_genome = fixed_length_genome
+        self.fitness_exponent = fitness_exponent
         self.population = []
         self.fittest = None
         self.fittest_ever = None
@@ -150,29 +152,27 @@ class GeneticAlgorithm:
         self.fittest = self.select_fittest()
         self.fittest_ever = self.fittest
 
-        # Log the fittest member ever encountered
-        logger.info(f"Fittest ever: {self.fittest_ever.value}\n{self.fittest_ever.final_stats()}")
-
         try:  # Wrap the main loop in a try-except block to handle crashes
             for _ in range(self.iterations):
-                logger.info(f"{total_cycles} {repr(self.fittest.fitness)} {self.fittest.value}")
                 fitnesses = np.array([item.fitness for item in self.population])
                 avg = np.average(fitnesses)
+                median = np.median(fitnesses)
                 std = np.std(fitnesses)
                 max_val = max(fitnesses)
                 min_val = min(fitnesses)
-                logger.info(f"max {max_val} min {min_val} avg {avg} std {std} var {std ** 2.0}")
+                logger.info(f"Iteration {total_cycles}: max: {max_val}, min: {min_val}, avg: {avg}, median: {median}, std: {std}, var: {std ** 2.0}")
+                logger.info(f"Top Performer This Generation:\n{self.fittest.final_stats()}")
                 total_cycles += 1
-                total_fitness = sum(entity.fitness for entity in self.population)
-                self.evolve_population(total_fitness)
+                self.evolve_population()
                 for member in tqdm(self.population, desc="Evaluating", ncols=100):
                     member.evaluate()
+                time.sleep(0.5)
                 self.fittest = self.select_fittest()
 
                 # Update the fittest member ever, if necessary
                 if self.fittest.fitness > self.fittest_ever.fitness:
                     self.fittest_ever = self.fittest
-                    logger.info(f"New fittest ever: {self.fittest_ever.final_stats()}")
+                    logger.info(f"New fittest ever!")
 
             end = time.process_time()
             total_time = end - start
@@ -202,23 +202,25 @@ class GeneticAlgorithm:
             new_entity.evaluate()
             self.population.append(new_entity)
 
-    def roulette_wheel_selection(self, total_fitness):
-        selected_value = random.uniform(0, total_fitness)
-        current_value = 0
-        for entity in self.population:
-            current_value += entity.fitness
-            if current_value >= selected_value:
-                return entity
-        return self.population[-1]
+    def roulette_wheel_selection(self):
+        probability_distribution = np.array([ind.fitness ** self.fitness_exponent for ind in self.population],
+                                            dtype='float64')
+        probs_sum = probability_distribution.sum()
+        if probs_sum != 0:
+            probability_distribution /= probability_distribution.sum()
+            weighted_random_choice = np.random.choice(self.population, 1, p=probability_distribution)[0]
+            return weighted_random_choice
+        else:
+            raise RuntimeError("Probability sum cannot equal zero.")
 
-    def evolve_population(self, total_fitness, keep_fittest=False):
+    def evolve_population(self, keep_fittest=True):
         if keep_fittest and self.fittest is not None:
             new_population = [self.fittest]
         else:
             new_population = []
         while len(new_population) < self.population_size:
-            parent1 = self.roulette_wheel_selection(total_fitness)
-            parent2 = self.roulette_wheel_selection(total_fitness)
+            parent1 = self.roulette_wheel_selection()
+            parent2 = self.roulette_wheel_selection()
             child = parent1.breed(parent2, mutation_chance=self.mutation_chance,
                                   fixed_length_genome=self.fixed_length_genome)
             new_population.append(child)
@@ -418,11 +420,11 @@ class InvestorPortfolio(Entity):
 def investor_portfolio_factory():
     initial_cash = 10000
     mutation_rate = 0.5
-    sell_threshold = random.random()
-    buy_threshold = random.random()
-    stop_loss_ratio = random.random()
-    buy_ratio = random.random()
-    sell_ratio = random.random()
+    sell_threshold = random.random() * 0.1
+    buy_threshold = random.random() * 0.1
+    stop_loss_ratio = (random.random() * 0.1) + 0.9
+    buy_ratio = (random.random() * 0.1) + 0.9
+    sell_ratio = (random.random() * 0.1) + 0.9
 
     new_entity = InvestorPortfolio()
     new_entity.setup(initial_cash, sell_threshold, buy_threshold, stop_loss_ratio, buy_ratio, sell_ratio, mutation_rate)
@@ -449,18 +451,13 @@ def main():
     InvestorPortfolio.set_stocks(stock_list)  # Make sure the stocks are set before creating an instance
     ga = GeneticAlgorithm(
         entity_factory=investor_portfolio_factory,
-        population_size=2000,
+        population_size=200,
         iterations=10000,
-        mutation_chance=0.01,
+        mutation_chance=0.001,
         fixed_length_genome=True,
+        fitness_exponent=1.0
     )
-    try:
-        ga.run()
-    except KeyboardInterrupt:
-        print("interrupted by user")
-    logger.info(ga.fittest.final_stats())
-    for trade_history_item in ga.fittest.trade_history:
-        logger.info(trade_history_item)
+    ga.run()
 
 
 if __name__ == "__main__":
