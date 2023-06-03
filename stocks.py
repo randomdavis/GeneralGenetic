@@ -156,6 +156,12 @@ class GeneticAlgorithm:
         try:  # Wrap the main loop in a try-except block to handle crashes
             for _ in range(self.iterations):
                 logger.info(f"{total_cycles} {repr(self.fittest.fitness)} {self.fittest.value}")
+                fitnesses = np.array([item.fitness for item in self.population])
+                avg = np.average(fitnesses)
+                std = np.std(fitnesses)
+                max_val = max(fitnesses)
+                min_val = min(fitnesses)
+                logger.info(f"max {max_val} min {min_val} avg {avg} std {std} var {std ** 2.0}")
                 total_cycles += 1
                 total_fitness = sum(entity.fitness for entity in self.population)
                 self.evolve_population(total_fitness)
@@ -411,7 +417,7 @@ class InvestorPortfolio(Entity):
 
 def investor_portfolio_factory():
     initial_cash = 10000
-    mutation_rate = 0.1
+    mutation_rate = 0.5
     sell_threshold = random.random()
     buy_threshold = random.random()
     stop_loss_ratio = random.random()
@@ -424,17 +430,28 @@ def investor_portfolio_factory():
 
 
 def main():
+    stock_points = 1000
     stock_list = [
-        Stock("AAPL", 150, 0.1, 0.05, 1, 1/365, random_seed=42),
-        Stock("GOOGL", 200, 0.08, 0.06, 1, 1/365, random_seed=42),
-        Stock("AMZN", 100, 0.12, 0.07, 1, 1/365, random_seed=42)
+        Stock("AAPL", 150, 0.1, 0.05, 1, 1 / stock_points, random_seed=42),
+        Stock("GOOGL", 200, 0.08, 0.06, 1, 1 / stock_points, random_seed=42),
+        Stock("AMZN", 100, 0.12, 0.07, 1, 1 / stock_points, random_seed=42),
+        Stock("TSLA", 600, 0.15, 0.08, 1, 1 / stock_points, random_seed=42),
+        Stock("MSFT", 250, 0.07, 0.04, 1, 1 / stock_points, random_seed=42),
+        Stock("NFLX", 180, 0.13, 0.09, 1, 1 / stock_points, random_seed=42),
+        Stock("FB", 300, 0.06, 0.03, 1, 1 / stock_points, random_seed=42),
+        Stock("NVDA", 800, 0.11, 0.06, 1, 1 / stock_points, random_seed=42),
+        Stock("AMD", 100, 0.14, 0.07, 1, 1 / stock_points, random_seed=42),
+        Stock("INTL", 50, 0.05, 0.02, 1, 1 / stock_points, random_seed=42),
+        Stock("JPM", 130, 0.05, 0.04, 1, 1 / stock_points, random_seed=42),
+        Stock("V", 210, 0.09, 0.05, 1, 1 / stock_points, random_seed=42),
+        Stock("MA", 350, 0.1, 0.05, 1, 1 / stock_points, random_seed=42)
     ]
     InvestorPortfolio.set_stocks(stock_list)  # Make sure the stocks are set before creating an instance
     ga = GeneticAlgorithm(
         entity_factory=investor_portfolio_factory,
         population_size=2000,
-        iterations=1000,
-        mutation_chance=0.1,
+        iterations=10000,
+        mutation_chance=0.01,
         fixed_length_genome=True,
     )
     try:
