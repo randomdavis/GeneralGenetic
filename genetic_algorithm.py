@@ -127,7 +127,7 @@ class GeneticAlgorithm:
 
     def generate_initial_population(self):
         for _ in tqdm(range(self.population_size), desc="Generating", ncols=100, disable=not self.show_progress_bars):
-            new_entity = self.entity_factory(self)
+            new_entity = self.entity_factory()
             new_entity.evaluate()
             self.population.append(new_entity)
 
